@@ -1,0 +1,24 @@
+{
+  "name": "site-training-tracker",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Site-centric training tracker — quiz scores and training dates per site, with shared person-level quiz competencies.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^10.6.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "vite": "^8.1.0"
+  }
+}
