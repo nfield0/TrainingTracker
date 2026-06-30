@@ -43,12 +43,22 @@ function fmtDate(iso) {
   return `${d}/${m}/${y}`;
 }
 
+function getRetrainingDate(iso) {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return "";
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCFullYear(dt.getUTCFullYear() + 1);
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
+}
+
 /* ───────────────────────── Seed data ─────────────────────────
    Transcribed from the training sheet. Every site gets the four
    shared quizzes by default; Conveyor / Lift are in the library to
    add per site. The original per-site training dates are seeded
    into the "Trained" column. */
 const TRAINED = { id: "trained", name: "Trained", scored: false };
+const RETRAINING = { id: "retraining", name: "Retraining", scored: false };
 const COMMON_QUIZZES = [
   { id: "safety", name: "Safety Quiz", scored: true },
   { id: "ss1", name: "Support Stage 1 Quiz", scored: true },
@@ -139,6 +149,7 @@ function buildSeed() {
     category: "",
     components: [
       { ...TRAINED },
+      { ...RETRAINING },
       ...COMMON_QUIZZES.map((c) => ({ ...c })),
     ],
   }));
@@ -189,7 +200,7 @@ function normalize(s) {
     });
     s.sites.forEach((site) =>
       site.components.forEach((c) => {
-        if (c.id !== "trained" && !seen.has(c.id)) {
+        if (c.id !== "trained" && c.id !== "retraining" && !seen.has(c.id)) {
           seen.add(c.id);
           lib.push({ id: c.id, name: c.name, scored: c.scored });
         }
@@ -201,6 +212,19 @@ function normalize(s) {
       if (!s.library.some((x) => x.id === c.id)) s.library.push({ ...c });
     });
   }
+
+  s.sites.forEach((site) => {
+    if (!site.components) site.components = [];
+    const trainedIndex = site.components.findIndex((c) => c.id === TRAINED.id);
+    if (trainedIndex === -1) {
+      site.components.unshift({ ...TRAINED });
+    }
+    if (!site.components.some((c) => c.id === RETRAINING.id)) {
+      const insertIndex = site.components.findIndex((c) => c.id === TRAINED.id);
+      site.components.splice(insertIndex >= 0 ? insertIndex + 1 : site.components.length, 0, { ...RETRAINING });
+    }
+  });
+
   return s;
 }
 
@@ -399,6 +423,25 @@ export default function App() {
       const merged = { ...cur, ...patch };
       if (!merged.date && (merged.score === null || merged.score === "")) delete d.records[k];
       else d.records[k] = merged;
+
+      if (compId !== "trained") {
+        const affectedSites = d.sites.filter((site) => site.components.some((c) => c.id === compId));
+        affectedSites.forEach((site) => {
+          let latestDate = "";
+          site.components.forEach((component) => {
+            if (component.id === "trained") return;
+            const rec = d.records[key(site.id, personId, component.id)] || {};
+            if (rec.date && (!latestDate || rec.date > latestDate)) latestDate = rec.date;
+          });
+
+          const trainingKey = key(site.id, personId, "trained");
+          if (latestDate) {
+            d.records[trainingKey] = { ...(d.records[trainingKey] || { date: "", score: null }), date: latestDate, score: null };
+          } else {
+            delete d.records[trainingKey];
+          }
+        });
+      }
     });
 
   const exportJSON = () => {
@@ -627,7 +670,7 @@ function SitesView({ state, stats, threshold, selectedSite, setSelectedSite, upd
                   className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600"
                 >
                   {c.name}
-                  {c.id !== "trained" && (
+                  {c.id !== "trained" && c.id !== "retraining" && (
                     <button
                       className="text-slate-400 hover:text-rose-500"
                       title="Remove from site"
@@ -679,31 +722,43 @@ function SitesView({ state, stats, threshold, selectedSite, setSelectedSite, upd
                         )}
                       </td>
                       {site.components.map((c) => {
-                        const rec = state.records[key(site.id, p.id, c.id)];
+                        const rec = c.id === "retraining"
+                          ? { date: getRetrainingDate(state.records[key(site.id, p.id, "trained")]?.date || "") }
+                          : state.records[key(site.id, p.id, c.id)] || {};
                         const st = cellStatus(c, rec, threshold);
                         return (
                           <td key={c.id} className="px-3 py-2 border-b border-slate-50">
-                            <button
-                              onClick={() => setCellEdit({ siteId: site.id, personId: p.id, comp: c })}
-                              className={`w-full text-left rounded-md border px-2 py-1.5 text-xs leading-tight min-w-24 ${STATUS_STYLE[st]} hover:brightness-95`}
-                            >
-                              {c.scored ? (
-                                rec && rec.score !== null && rec.score !== undefined && rec.score !== "" ? (
-                                  <>
-                                    <span className="font-semibold tabular-nums">{rec.score}%</span>
-                                    {rec.date && (
-                                      <span className="block opacity-70 tabular-nums">{fmtDate(rec.date)}</span>
-                                    )}
-                                  </>
+                            {c.id === "retraining" ? (
+                              <div className={`w-full rounded-md border px-2 py-1.5 text-xs leading-tight min-w-24 ${STATUS_STYLE[st]}`}>
+                                {rec.date ? (
+                                  <span className="font-medium tabular-nums">{fmtDate(rec.date)}</span>
                                 ) : (
                                   <span className="opacity-60">—</span>
-                                )
-                              ) : rec && rec.date ? (
-                                <span className="font-medium tabular-nums">{fmtDate(rec.date)}</span>
-                              ) : (
-                                <span className="opacity-60">—</span>
-                              )}
-                            </button>
+                                )}
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => setCellEdit({ siteId: site.id, personId: p.id, comp: c })}
+                                className={`w-full text-left rounded-md border px-2 py-1.5 text-xs leading-tight min-w-24 ${STATUS_STYLE[st]} hover:brightness-95`}
+                              >
+                                {c.scored ? (
+                                  rec && rec.score !== null && rec.score !== undefined && rec.score !== "" ? (
+                                    <>
+                                      <span className="font-semibold tabular-nums">{rec.score}%</span>
+                                      {rec.date && (
+                                        <span className="block opacity-70 tabular-nums">{fmtDate(rec.date)}</span>
+                                      )}
+                                    </>
+                                  ) : (
+                                    <span className="opacity-60">—</span>
+                                  )
+                                ) : rec && rec.date ? (
+                                  <span className="font-medium tabular-nums">{fmtDate(rec.date)}</span>
+                                ) : (
+                                  <span className="opacity-60">—</span>
+                                )}
+                              </button>
+                            )}
                           </td>
                         );
                       })}
@@ -730,7 +785,7 @@ function SitesView({ state, stats, threshold, selectedSite, setSelectedSite, upd
                   name: data.name || "New Site",
                   color: data.color,
                   category: data.category,
-                  components: [{ ...TRAINED }, ...COMMON_QUIZZES.map((c) => ({ ...c }))],
+                  components: [{ ...TRAINED }, { ...RETRAINING }, ...COMMON_QUIZZES.map((c) => ({ ...c }))],
                 })
               );
               setSelectedSite(id);
@@ -1009,6 +1064,7 @@ function PeopleView({ state, stats, update }) {
               <th className="px-3 py-2 font-medium">Trainer</th>
               <th className="px-3 py-2 font-medium">Sites trained</th>
               <th className="px-3 py-2 font-medium">Last trained</th>
+              <th className="px-3 py-2 font-medium">Next retraining</th>
               <th className="px-3 py-2 font-medium w-48">Quiz pass rate</th>
               <th className="px-3 py-2 font-medium" />
             </tr>
@@ -1017,6 +1073,7 @@ function PeopleView({ state, stats, update }) {
             {state.people.map((p) => {
               const trained = stats.personSites[p.id] || 0;
               const last = stats.personLast[p.id];
+              const nextRetraining = last ? getRetrainingDate(last) : "";
               const pct = stats.personPct[p.id] ?? 0;
               return (
                 <tr key={p.id} className="border-t border-slate-50 hover:bg-slate-50/60">
@@ -1035,6 +1092,7 @@ function PeopleView({ state, stats, update }) {
                     )}
                   </td>
                   <td className="px-3 py-2.5 tabular-nums text-slate-600">{last ? fmtDate(last) : "—"}</td>
+                  <td className="px-3 py-2.5 tabular-nums text-slate-600">{nextRetraining ? fmtDate(nextRetraining) : "—"}</td>
                   <td className="px-3 py-2.5">
                     <div className="flex items-center gap-2">
                       <div className="flex-1">
