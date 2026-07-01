@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { supabase } from "./lib/supabase.js";
 
 /* ───────────────────────── Persistence ─────────────────────────
    Uses the artifact storage API when available, falls back to
@@ -319,19 +320,57 @@ export default function App() {
   const saveTimer = useRef(null);
   const fileInput = useRef(null);
 
+  const applyLoadedState = useCallback((loaded) => {
+    const s = normalize(loaded || buildSeed());
+    setState((prev) => {
+      const prevJson = JSON.stringify(prev);
+      const nextJson = JSON.stringify(s);
+      return prevJson === nextJson ? prev : s;
+    });
+    setSelectedSite((prev) => prev ?? s.sites[0]?.id ?? null);
+  }, []);
+
   // load once
   useEffect(() => {
     let alive = true;
     loadState().then((loaded) => {
       if (!alive) return;
-      const s = normalize(loaded || buildSeed());
-      setState(s);
-      setSelectedSite(s.sites[0]?.id ?? null);
+      applyLoadedState(loaded);
     });
     return () => {
       alive = false;
     };
-  }, []);
+  }, [applyLoadedState]);
+
+  // stay in sync with Supabase updates from other browsers/tabs
+  useEffect(() => {
+    if (!supabase) return undefined;
+
+    const channel = supabase.channel("tracker-sync");
+    channel.on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "tracker_state",
+        filter: `key=eq.${STORAGE_KEY}`,
+      },
+      () => {
+        loadState().then((loaded) => applyLoadedState(loaded));
+      }
+    );
+
+    channel.subscribe();
+
+    const intervalId = window.setInterval(() => {
+      loadState().then((loaded) => applyLoadedState(loaded));
+    }, 2000);
+
+    return () => {
+      supabase.removeChannel(channel);
+      window.clearInterval(intervalId);
+    };
+  }, [applyLoadedState]);
 
   // debounced save on change
   useEffect(() => {
